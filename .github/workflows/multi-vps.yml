@@ -1,0 +1,58 @@
+name: Multi Ubuntu VPS (tmate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Số VPS muốn tạo (1–10)"
+        required: true
+        default: "10"
+      stagger_seconds:
+        description: "Giãn thời gian khởi động giữa các VPS (giây)"
+        required: true
+        default: "5"
+
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2              # 👈 phù hợp giới hạn repo private/free
+      matrix:
+        idx: [1,2,3,4,5,6,7,8,9,10]
+    steps:
+      - name: Gate theo số lượng yêu cầu
+        id: gate
+        run: |
+          REQ=${{ inputs.count }}
+          IDX=${{ matrix.idx }}
+          if [ "$IDX" -le "$REQ" ]; then
+            echo "run_this=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_this=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Chờ theo chỉ số (stagger)
+        if: steps.gate.outputs.run_this == 'true'
+        run: |
+          S=${{ inputs.stagger_seconds }}
+          [ -z "$S" ] && S=5
+          sleep $(( ( ${{ matrix.idx }} - 1 ) * S ))
+
+      - name: In thông tin runner
+        if: steps.gate.outputs.run_this == 'true'
+        run: |
+          echo "VPS #${{ matrix.idx }}"
+          uname -a
+          command -v lsb_release >/dev/null && lsb_release -a || true
+          echo -n "IP public: "
+          curl -s ifconfig.me || true
+          echo
+          echo "Mỗi VPS tối đa ~6h."
+
+      - name: Start SSH session (tmate) - VPS #${{ matrix.idx }}
+        if: steps.gate.outputs.run_this == 'true'
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
