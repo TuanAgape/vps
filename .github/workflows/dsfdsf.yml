@@ -1,0 +1,91 @@
+name: Multi Ubuntu VPS (tmate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Số VPS muốn tạo (1–10)"
+        required: true
+        default: "10"
+      max_parallel:
+        description: "Số VPS chạy đồng thời (gợi ý: 2 cho repo private/free)"
+        required: true
+        default: "2"
+      stagger_seconds:
+        description: "Giãn thời gian khởi động giữa các VPS (giây)"
+        required: true
+        default: "5"
+  # Bật dòng dưới nếu muốn tự spawn lại mỗi 6h (không bắt buộc)
+  # schedule:
+  #   - cron: "0 */6 * * *"
+
+jobs:
+  vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # mỗi VPS tối đa ~6 giờ
+    strategy:
+      fail-fast: false
+      # max-parallel không nhận biến trực tiếp, nên cố định 10 và gate bằng if ở step
+      max-parallel: 10
+      matrix:
+        idx: [1,2,3,4,5,6,7,8,9,10]   # tối đa 10 VPS
+    steps:
+      - name: Gate theo số lượng yêu cầu
+        id: gate
+        run: |
+          REQ=${{ inputs.count }}
+          IDX=${{ matrix.idx }}
+          if [ "$IDX" -le "$REQ" ]; then
+            echo "run_this=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_this=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Tính max-parallel thực tế
+        id: par
+        run: |
+          # Giới hạn max-parallel hợp lệ (1..10)
+          MP=${{ inputs.max_parallel }}
+          if [ -z "$MP" ] || [ "$MP" -lt 1 ]; then MP=1; fi
+          if [ "$MP" -gt 10 ]; then MP=10; fi
+          echo "mp=$MP" >> $GITHUB_OUTPUT
+
+      - name: Chờ theo chỉ số (stagger)
+        if: steps.gate.outputs.run_this == 'true'
+        run: |
+          S=${{ inputs.stagger_seconds }}
+          [ -z "$S" ] && S=5
+          sleep $(( ( ${{ matrix.idx }} - 1 ) * S ))
+
+      - name: In thông tin runner
+        if: steps.gate.outputs.run_this == 'true'
+        run: |
+          echo "VPS #${{ matrix.idx }}"
+          uname -a
+          lsb_release -a || true
+          echo "IP public:"
+          curl -s ifconfig.me || true
+          echo
+          echo "Lưu ý: mỗi job tối đa ~6h."
+
+      - name: Start SSH session (tmate) - VPS #${{ matrix.idx }}
+        if: steps.gate.outputs.run_this == 'true'
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false  # không yêu cầu SSH key – có link là vào được
+
+      # Giữ log “sống” nếu cần (không bắt buộc)
+      # - name: Keepalive (mỗi 5 phút in 1 dòng)
+      #   if: steps.gate.outputs.run_this == 'true'
+      #   run: |
+      #     for i in $(seq 1 70); do
+      #       echo "Keepalive $i $(date -u +"%F %T")"
+      #       sleep 300
+      #     done
+
+    # Trick giới hạn song song theo inputs.max_parallel:
+    # GitHub không cho set max-parallel động, nên ta chạy 10 job “có điều kiện”.
+    # Dưới đây dùng concurrency group để ép hàng đợi theo lô.
+    concurrency:
+      group: vps-${{ github.run_id }}-slot-${{ fromJson('["A","B","C","D","E","F","G","H","I","J"]')[matrix.idx - 1] % (steps.par.outputs.mp || 2) }}
+      cancel-in-progress: false
